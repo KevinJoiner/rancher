@@ -1,6 +1,7 @@
 package rancher
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/gorilla/mux"
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 	responsewriter "github.com/rancher/apiserver/pkg/middleware"
@@ -39,10 +41,12 @@ import (
 	aggregation2 "github.com/rancher/steve/pkg/aggregation"
 	steveauth "github.com/rancher/steve/pkg/auth"
 	steveserver "github.com/rancher/steve/pkg/server"
+	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/k8scheck"
 	"github.com/rancher/wrangler/pkg/unstructured"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	k8serror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -180,7 +184,8 @@ func New(ctx context.Context, clientConfg clientcmd.ClientConfig, opts *Options)
 	if err != nil {
 		return nil, err
 	}
-
+	router := steve.Handler.(*mux.Router)
+	router.HandleFunc("/test/wrangler", wranglerTest(wranglerContext.Apply))
 	clusterProxy, err := proxy.NewProxyMiddleware(wranglerContext.K8s.AuthorizationV1(),
 		wranglerContext.TunnelServer.Dialer,
 		wranglerContext.Mgmt.Cluster().Cache(),
@@ -555,4 +560,143 @@ func migrateEncryptionConfig(ctx context.Context, restConfig *rest.Config) error
 		}
 	}
 	return allErrors
+}
+
+func wranglerTest(apply apply.Apply) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		apply.
+			WithDynamicLookup().
+			WithSetID("wrangler-test").ApplyObjects(
+			&batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "wrangler-test",
+				},
+				Spec: batchv1.JobSpec{
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{"test1-name": "test1-value", "test2-name": "abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz1234567890"},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:    "wrangler-test-job-1",
+									Image:   "perl:5.34",
+									Command: []string{"perl", "-Mbignum=bpi", "-wle", "print bpi(2000)"},
+								},
+							},
+							RestartPolicy: v1.RestartPolicyNever,
+						},
+					},
+				},
+			},
+			&batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "wrangler-test-2",
+				},
+				Spec: batchv1.JobSpec{
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{"test1-name": "test1-value", "test2-name": "abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz1234567890"},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:    "wrangler-test-job-2",
+									Image:   "perl:5.34",
+									Command: []string{"perl", "-Mbignum=bpi", "-wle", "print bpi(2000)"},
+								},
+							},
+							RestartPolicy: v1.RestartPolicyNever,
+						},
+					},
+				},
+			},
+		)
+		err := apply.
+			WithDynamicLookup().
+			WithSetID("wrangler-test-update").ApplyObjects(
+			&batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "wrangler-test",
+				},
+				Spec: batchv1.JobSpec{
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{"test1-name": "test1-value", "test2-name": "abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz1234567890"},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:    "wrangler-test-job-1",
+									Image:   "perl:5.34",
+									Command: []string{"perl", "-Mbignum=bpi", "-wle", "print bpi(2000)"},
+								},
+							},
+							RestartPolicy: v1.RestartPolicyNever,
+						},
+					},
+				},
+			},
+		)
+		haveFun := r.URL.Query().Get("fun")
+		if haveFun == "" {
+			if err != nil {
+				http.Error(rw, fmt.Sprintf("Failed to update job %s", err), http.StatusInternalServerError)
+
+				return
+			}
+			_, _ = rw.Write([]byte("Job update was successfully applied!"))
+			return
+		}
+
+		// cache-control: no-cache, no-store, must-revalidate
+		// content-encoding: gzip
+		// content-type: text/html
+		// date: Fri, 01 Jul 2022 13:04:07 GMT
+		// expires: Wed 24 Feb 1982 18:42:00 GMT
+		// ngrok-trace-id: a88f7f842ca43b0c3903bf26cdadfc80
+		// x-api-cattle-auth: true
+		// x-api-schemas: https://70c5-72-49-99-27.ngrok.io/v1/schemas
+		// x-content-type-options: nosniff
+		rw.Header().Set("Content-Encoding", "gzip")
+		rw.Header().Set("Content-type", "text/html")
+		rw.Header().Del("Content-Length")
+
+		gz := gzip.NewWriter(rw)
+		url := settings.InternalServerURL.Get()
+		responseData := `{
+			"type": "collection",
+			"links": {
+			"self": "` + url + `/test/wrangler"
+			},
+			"createTypes": {
+			"batch.job": "` + url + `/test/wrangler"
+			},
+			"actions": { },
+			"resourceType": "batch.job",
+			"revision": "4215",
+			"data": [],
+		}`
+		response := []byte(` <!DOCTYPE html>
+		<!-- If you are reading this, its too late... -->
+		<link rel="stylesheet" type="text/css" href="https://releases.rancher.com/api-ui/1.1.8/ui.min.css" />
+		<script src="https://releases.rancher.com/api-ui/1.1.8/ui.min.js"></script>
+		<script>
+		var user = "admin";
+		var curlUser='${CATTLE_ACCESS_KEY}:${CATTLE_SECRET_KEY}';
+		var schemas="` + url + `/v1/schemas";
+		var data =` + responseData + `
+		</script>
+		`)
+
+		_, err = gz.Write(response)
+		if err != nil {
+			http.Error(rw, "Failed to write zip", http.StatusInternalServerError)
+		}
+
+		err = gz.Close()
+		if err != nil {
+			http.Error(rw, "Failed to close zip", http.StatusInternalServerError)
+		}
+	}
 }
