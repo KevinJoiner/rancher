@@ -22,8 +22,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/rancher/lasso/pkg/client"
-	"github.com/rancher/lasso/pkg/controller"
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/condition"
@@ -36,9 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/tools/cache"
 )
 
 type KontainerDriverHandler func(string, *v3.KontainerDriver) (*v3.KontainerDriver, error)
@@ -76,196 +72,39 @@ type KontainerDriverCache interface {
 
 type KontainerDriverIndexer func(obj *v3.KontainerDriver) ([]string, error)
 
-type kontainerDriverController struct {
-	controller    controller.SharedController
-	client        *client.Client
-	gvk           schema.GroupVersionKind
-	groupResource schema.GroupResource
+type KontainerDriverGenericController struct {
+	generic.NonNamespacedControllerInterface[*v3.KontainerDriver, *v3.KontainerDriverList]
 }
 
-func NewKontainerDriverController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) KontainerDriverController {
-	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
-	return &kontainerDriverController{
-		controller: c,
-		client:     c.Client(),
-		gvk:        gvk,
-		groupResource: schema.GroupResource{
-			Group:    gvk.Group,
-			Resource: resource,
-		},
+func (c *KontainerDriverGenericController) OnChange(ctx context.Context, name string, sync KontainerDriverHandler) {
+	c.NonNamespacedControllerInterface.OnChange(ctx, name, generic.ObjectHandler[*v3.KontainerDriver](sync))
+}
+
+func (c *KontainerDriverGenericController) OnRemove(ctx context.Context, name string, sync KontainerDriverHandler) {
+	c.NonNamespacedControllerInterface.OnRemove(ctx, name, generic.ObjectHandler[*v3.KontainerDriver](sync))
+}
+
+func (c *KontainerDriverGenericController) Cache() KontainerDriverCache {
+	return &KontainerDriverGenericCache{
+		c.NonNamespacedControllerInterface.Cache(),
 	}
 }
 
-func FromKontainerDriverHandlerToHandler(sync KontainerDriverHandler) generic.Handler {
-	return func(key string, obj runtime.Object) (ret runtime.Object, err error) {
-		var v *v3.KontainerDriver
-		if obj == nil {
-			v, err = sync(key, nil)
-		} else {
-			v, err = sync(key, obj.(*v3.KontainerDriver))
-		}
-		if v == nil {
-			return nil, err
-		}
-		return v, err
-	}
+type KontainerDriverGenericCache struct {
+	generic.NonNamespacedCacheInterface[*v3.KontainerDriver]
 }
 
-func (c *kontainerDriverController) Updater() generic.Updater {
-	return func(obj runtime.Object) (runtime.Object, error) {
-		newObj, err := c.Update(obj.(*v3.KontainerDriver))
-		if newObj == nil {
-			return nil, err
-		}
-		return newObj, err
-	}
-}
-
-func UpdateKontainerDriverDeepCopyOnChange(client KontainerDriverClient, obj *v3.KontainerDriver, handler func(obj *v3.KontainerDriver) (*v3.KontainerDriver, error)) (*v3.KontainerDriver, error) {
-	if obj == nil {
-		return obj, nil
-	}
-
-	copyObj := obj.DeepCopy()
-	newObj, err := handler(copyObj)
-	if newObj != nil {
-		copyObj = newObj
-	}
-	if obj.ResourceVersion == copyObj.ResourceVersion && !equality.Semantic.DeepEqual(obj, copyObj) {
-		return client.Update(copyObj)
-	}
-
-	return copyObj, err
-}
-
-func (c *kontainerDriverController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
-}
-
-func (c *kontainerDriverController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
-}
-
-func (c *kontainerDriverController) OnChange(ctx context.Context, name string, sync KontainerDriverHandler) {
-	c.AddGenericHandler(ctx, name, FromKontainerDriverHandlerToHandler(sync))
-}
-
-func (c *kontainerDriverController) OnRemove(ctx context.Context, name string, sync KontainerDriverHandler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromKontainerDriverHandlerToHandler(sync)))
-}
-
-func (c *kontainerDriverController) Enqueue(name string) {
-	c.controller.Enqueue("", name)
-}
-
-func (c *kontainerDriverController) EnqueueAfter(name string, duration time.Duration) {
-	c.controller.EnqueueAfter("", name, duration)
-}
-
-func (c *kontainerDriverController) Informer() cache.SharedIndexInformer {
-	return c.controller.Informer()
-}
-
-func (c *kontainerDriverController) GroupVersionKind() schema.GroupVersionKind {
-	return c.gvk
-}
-
-func (c *kontainerDriverController) Cache() KontainerDriverCache {
-	return &kontainerDriverCache{
-		indexer:  c.Informer().GetIndexer(),
-		resource: c.groupResource,
-	}
-}
-
-func (c *kontainerDriverController) Create(obj *v3.KontainerDriver) (*v3.KontainerDriver, error) {
-	result := &v3.KontainerDriver{}
-	return result, c.client.Create(context.TODO(), "", obj, result, metav1.CreateOptions{})
-}
-
-func (c *kontainerDriverController) Update(obj *v3.KontainerDriver) (*v3.KontainerDriver, error) {
-	result := &v3.KontainerDriver{}
-	return result, c.client.Update(context.TODO(), "", obj, result, metav1.UpdateOptions{})
-}
-
-func (c *kontainerDriverController) UpdateStatus(obj *v3.KontainerDriver) (*v3.KontainerDriver, error) {
-	result := &v3.KontainerDriver{}
-	return result, c.client.UpdateStatus(context.TODO(), "", obj, result, metav1.UpdateOptions{})
-}
-
-func (c *kontainerDriverController) Delete(name string, options *metav1.DeleteOptions) error {
-	if options == nil {
-		options = &metav1.DeleteOptions{}
-	}
-	return c.client.Delete(context.TODO(), "", name, *options)
-}
-
-func (c *kontainerDriverController) Get(name string, options metav1.GetOptions) (*v3.KontainerDriver, error) {
-	result := &v3.KontainerDriver{}
-	return result, c.client.Get(context.TODO(), "", name, result, options)
-}
-
-func (c *kontainerDriverController) List(opts metav1.ListOptions) (*v3.KontainerDriverList, error) {
-	result := &v3.KontainerDriverList{}
-	return result, c.client.List(context.TODO(), "", result, opts)
-}
-
-func (c *kontainerDriverController) Watch(opts metav1.ListOptions) (watch.Interface, error) {
-	return c.client.Watch(context.TODO(), "", opts)
-}
-
-func (c *kontainerDriverController) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (*v3.KontainerDriver, error) {
-	result := &v3.KontainerDriver{}
-	return result, c.client.Patch(context.TODO(), "", name, pt, data, result, metav1.PatchOptions{}, subresources...)
-}
-
-type kontainerDriverCache struct {
-	indexer  cache.Indexer
-	resource schema.GroupResource
-}
-
-func (c *kontainerDriverCache) Get(name string) (*v3.KontainerDriver, error) {
-	obj, exists, err := c.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(c.resource, name)
-	}
-	return obj.(*v3.KontainerDriver), nil
-}
-
-func (c *kontainerDriverCache) List(selector labels.Selector) (ret []*v3.KontainerDriver, err error) {
-
-	err = cache.ListAll(c.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v3.KontainerDriver))
-	})
-
-	return ret, err
-}
-
-func (c *kontainerDriverCache) AddIndexer(indexName string, indexer KontainerDriverIndexer) {
-	utilruntime.Must(c.indexer.AddIndexers(map[string]cache.IndexFunc{
-		indexName: func(obj interface{}) (strings []string, e error) {
-			return indexer(obj.(*v3.KontainerDriver))
-		},
-	}))
-}
-
-func (c *kontainerDriverCache) GetByIndex(indexName, key string) (result []*v3.KontainerDriver, err error) {
-	objs, err := c.indexer.ByIndex(indexName, key)
-	if err != nil {
-		return nil, err
-	}
-	result = make([]*v3.KontainerDriver, 0, len(objs))
-	for _, obj := range objs {
-		result = append(result, obj.(*v3.KontainerDriver))
-	}
-	return result, nil
+func (c KontainerDriverGenericCache) AddIndexer(indexName string, indexer KontainerDriverIndexer) {
+	c.NonNamespacedCacheInterface.AddIndexer(indexName, generic.Indexer[*v3.KontainerDriver](indexer))
 }
 
 type KontainerDriverStatusHandler func(obj *v3.KontainerDriver, status v3.KontainerDriverStatus) (v3.KontainerDriverStatus, error)
 
 type KontainerDriverGeneratingHandler func(obj *v3.KontainerDriver, status v3.KontainerDriverStatus) ([]runtime.Object, v3.KontainerDriverStatus, error)
+
+func FromKontainerDriverHandlerToHandler(sync KontainerDriverHandler) generic.Handler {
+	return generic.FromObjectHandlerToHandler(generic.ObjectHandler[*v3.KontainerDriver](sync))
+}
 
 func RegisterKontainerDriverStatusHandler(ctx context.Context, controller KontainerDriverController, condition condition.Cond, name string, handler KontainerDriverStatusHandler) {
 	statusHandler := &kontainerDriverStatusHandler{

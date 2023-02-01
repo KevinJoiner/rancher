@@ -22,8 +22,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/rancher/lasso/pkg/client"
-	"github.com/rancher/lasso/pkg/controller"
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/condition"
@@ -36,9 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/tools/cache"
 )
 
 type UserHandler func(string, *v3.User) (*v3.User, error)
@@ -76,196 +72,39 @@ type UserCache interface {
 
 type UserIndexer func(obj *v3.User) ([]string, error)
 
-type userController struct {
-	controller    controller.SharedController
-	client        *client.Client
-	gvk           schema.GroupVersionKind
-	groupResource schema.GroupResource
+type UserGenericController struct {
+	generic.NonNamespacedControllerInterface[*v3.User, *v3.UserList]
 }
 
-func NewUserController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) UserController {
-	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
-	return &userController{
-		controller: c,
-		client:     c.Client(),
-		gvk:        gvk,
-		groupResource: schema.GroupResource{
-			Group:    gvk.Group,
-			Resource: resource,
-		},
+func (c *UserGenericController) OnChange(ctx context.Context, name string, sync UserHandler) {
+	c.NonNamespacedControllerInterface.OnChange(ctx, name, generic.ObjectHandler[*v3.User](sync))
+}
+
+func (c *UserGenericController) OnRemove(ctx context.Context, name string, sync UserHandler) {
+	c.NonNamespacedControllerInterface.OnRemove(ctx, name, generic.ObjectHandler[*v3.User](sync))
+}
+
+func (c *UserGenericController) Cache() UserCache {
+	return &UserGenericCache{
+		c.NonNamespacedControllerInterface.Cache(),
 	}
 }
 
-func FromUserHandlerToHandler(sync UserHandler) generic.Handler {
-	return func(key string, obj runtime.Object) (ret runtime.Object, err error) {
-		var v *v3.User
-		if obj == nil {
-			v, err = sync(key, nil)
-		} else {
-			v, err = sync(key, obj.(*v3.User))
-		}
-		if v == nil {
-			return nil, err
-		}
-		return v, err
-	}
+type UserGenericCache struct {
+	generic.NonNamespacedCacheInterface[*v3.User]
 }
 
-func (c *userController) Updater() generic.Updater {
-	return func(obj runtime.Object) (runtime.Object, error) {
-		newObj, err := c.Update(obj.(*v3.User))
-		if newObj == nil {
-			return nil, err
-		}
-		return newObj, err
-	}
-}
-
-func UpdateUserDeepCopyOnChange(client UserClient, obj *v3.User, handler func(obj *v3.User) (*v3.User, error)) (*v3.User, error) {
-	if obj == nil {
-		return obj, nil
-	}
-
-	copyObj := obj.DeepCopy()
-	newObj, err := handler(copyObj)
-	if newObj != nil {
-		copyObj = newObj
-	}
-	if obj.ResourceVersion == copyObj.ResourceVersion && !equality.Semantic.DeepEqual(obj, copyObj) {
-		return client.Update(copyObj)
-	}
-
-	return copyObj, err
-}
-
-func (c *userController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
-}
-
-func (c *userController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
-}
-
-func (c *userController) OnChange(ctx context.Context, name string, sync UserHandler) {
-	c.AddGenericHandler(ctx, name, FromUserHandlerToHandler(sync))
-}
-
-func (c *userController) OnRemove(ctx context.Context, name string, sync UserHandler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromUserHandlerToHandler(sync)))
-}
-
-func (c *userController) Enqueue(name string) {
-	c.controller.Enqueue("", name)
-}
-
-func (c *userController) EnqueueAfter(name string, duration time.Duration) {
-	c.controller.EnqueueAfter("", name, duration)
-}
-
-func (c *userController) Informer() cache.SharedIndexInformer {
-	return c.controller.Informer()
-}
-
-func (c *userController) GroupVersionKind() schema.GroupVersionKind {
-	return c.gvk
-}
-
-func (c *userController) Cache() UserCache {
-	return &userCache{
-		indexer:  c.Informer().GetIndexer(),
-		resource: c.groupResource,
-	}
-}
-
-func (c *userController) Create(obj *v3.User) (*v3.User, error) {
-	result := &v3.User{}
-	return result, c.client.Create(context.TODO(), "", obj, result, metav1.CreateOptions{})
-}
-
-func (c *userController) Update(obj *v3.User) (*v3.User, error) {
-	result := &v3.User{}
-	return result, c.client.Update(context.TODO(), "", obj, result, metav1.UpdateOptions{})
-}
-
-func (c *userController) UpdateStatus(obj *v3.User) (*v3.User, error) {
-	result := &v3.User{}
-	return result, c.client.UpdateStatus(context.TODO(), "", obj, result, metav1.UpdateOptions{})
-}
-
-func (c *userController) Delete(name string, options *metav1.DeleteOptions) error {
-	if options == nil {
-		options = &metav1.DeleteOptions{}
-	}
-	return c.client.Delete(context.TODO(), "", name, *options)
-}
-
-func (c *userController) Get(name string, options metav1.GetOptions) (*v3.User, error) {
-	result := &v3.User{}
-	return result, c.client.Get(context.TODO(), "", name, result, options)
-}
-
-func (c *userController) List(opts metav1.ListOptions) (*v3.UserList, error) {
-	result := &v3.UserList{}
-	return result, c.client.List(context.TODO(), "", result, opts)
-}
-
-func (c *userController) Watch(opts metav1.ListOptions) (watch.Interface, error) {
-	return c.client.Watch(context.TODO(), "", opts)
-}
-
-func (c *userController) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (*v3.User, error) {
-	result := &v3.User{}
-	return result, c.client.Patch(context.TODO(), "", name, pt, data, result, metav1.PatchOptions{}, subresources...)
-}
-
-type userCache struct {
-	indexer  cache.Indexer
-	resource schema.GroupResource
-}
-
-func (c *userCache) Get(name string) (*v3.User, error) {
-	obj, exists, err := c.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(c.resource, name)
-	}
-	return obj.(*v3.User), nil
-}
-
-func (c *userCache) List(selector labels.Selector) (ret []*v3.User, err error) {
-
-	err = cache.ListAll(c.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v3.User))
-	})
-
-	return ret, err
-}
-
-func (c *userCache) AddIndexer(indexName string, indexer UserIndexer) {
-	utilruntime.Must(c.indexer.AddIndexers(map[string]cache.IndexFunc{
-		indexName: func(obj interface{}) (strings []string, e error) {
-			return indexer(obj.(*v3.User))
-		},
-	}))
-}
-
-func (c *userCache) GetByIndex(indexName, key string) (result []*v3.User, err error) {
-	objs, err := c.indexer.ByIndex(indexName, key)
-	if err != nil {
-		return nil, err
-	}
-	result = make([]*v3.User, 0, len(objs))
-	for _, obj := range objs {
-		result = append(result, obj.(*v3.User))
-	}
-	return result, nil
+func (c UserGenericCache) AddIndexer(indexName string, indexer UserIndexer) {
+	c.NonNamespacedCacheInterface.AddIndexer(indexName, generic.Indexer[*v3.User](indexer))
 }
 
 type UserStatusHandler func(obj *v3.User, status v3.UserStatus) (v3.UserStatus, error)
 
 type UserGeneratingHandler func(obj *v3.User, status v3.UserStatus) ([]runtime.Object, v3.UserStatus, error)
+
+func FromUserHandlerToHandler(sync UserHandler) generic.Handler {
+	return generic.FromObjectHandlerToHandler(generic.ObjectHandler[*v3.User](sync))
+}
 
 func RegisterUserStatusHandler(ctx context.Context, controller UserController, condition condition.Cond, name string, handler UserStatusHandler) {
 	statusHandler := &userStatusHandler{

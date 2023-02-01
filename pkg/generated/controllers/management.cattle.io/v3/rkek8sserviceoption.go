@@ -22,20 +22,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/rancher/lasso/pkg/client"
-	"github.com/rancher/lasso/pkg/controller"
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/wrangler/pkg/generic"
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/tools/cache"
 )
 
 type RkeK8sServiceOptionHandler func(string, *v3.RkeK8sServiceOption) (*v3.RkeK8sServiceOption, error)
@@ -73,184 +65,28 @@ type RkeK8sServiceOptionCache interface {
 
 type RkeK8sServiceOptionIndexer func(obj *v3.RkeK8sServiceOption) ([]string, error)
 
-type rkeK8sServiceOptionController struct {
-	controller    controller.SharedController
-	client        *client.Client
-	gvk           schema.GroupVersionKind
-	groupResource schema.GroupResource
+type RkeK8sServiceOptionGenericController struct {
+	generic.ControllerInterface[*v3.RkeK8sServiceOption, *v3.RkeK8sServiceOptionList]
 }
 
-func NewRkeK8sServiceOptionController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) RkeK8sServiceOptionController {
-	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
-	return &rkeK8sServiceOptionController{
-		controller: c,
-		client:     c.Client(),
-		gvk:        gvk,
-		groupResource: schema.GroupResource{
-			Group:    gvk.Group,
-			Resource: resource,
-		},
+func (c *RkeK8sServiceOptionGenericController) OnChange(ctx context.Context, name string, sync RkeK8sServiceOptionHandler) {
+	c.ControllerInterface.OnChange(ctx, name, generic.ObjectHandler[*v3.RkeK8sServiceOption](sync))
+}
+
+func (c *RkeK8sServiceOptionGenericController) OnRemove(ctx context.Context, name string, sync RkeK8sServiceOptionHandler) {
+	c.ControllerInterface.OnRemove(ctx, name, generic.ObjectHandler[*v3.RkeK8sServiceOption](sync))
+}
+
+func (c *RkeK8sServiceOptionGenericController) Cache() RkeK8sServiceOptionCache {
+	return &RkeK8sServiceOptionGenericCache{
+		c.ControllerInterface.Cache(),
 	}
 }
 
-func FromRkeK8sServiceOptionHandlerToHandler(sync RkeK8sServiceOptionHandler) generic.Handler {
-	return func(key string, obj runtime.Object) (ret runtime.Object, err error) {
-		var v *v3.RkeK8sServiceOption
-		if obj == nil {
-			v, err = sync(key, nil)
-		} else {
-			v, err = sync(key, obj.(*v3.RkeK8sServiceOption))
-		}
-		if v == nil {
-			return nil, err
-		}
-		return v, err
-	}
+type RkeK8sServiceOptionGenericCache struct {
+	generic.CacheInterface[*v3.RkeK8sServiceOption]
 }
 
-func (c *rkeK8sServiceOptionController) Updater() generic.Updater {
-	return func(obj runtime.Object) (runtime.Object, error) {
-		newObj, err := c.Update(obj.(*v3.RkeK8sServiceOption))
-		if newObj == nil {
-			return nil, err
-		}
-		return newObj, err
-	}
-}
-
-func UpdateRkeK8sServiceOptionDeepCopyOnChange(client RkeK8sServiceOptionClient, obj *v3.RkeK8sServiceOption, handler func(obj *v3.RkeK8sServiceOption) (*v3.RkeK8sServiceOption, error)) (*v3.RkeK8sServiceOption, error) {
-	if obj == nil {
-		return obj, nil
-	}
-
-	copyObj := obj.DeepCopy()
-	newObj, err := handler(copyObj)
-	if newObj != nil {
-		copyObj = newObj
-	}
-	if obj.ResourceVersion == copyObj.ResourceVersion && !equality.Semantic.DeepEqual(obj, copyObj) {
-		return client.Update(copyObj)
-	}
-
-	return copyObj, err
-}
-
-func (c *rkeK8sServiceOptionController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
-}
-
-func (c *rkeK8sServiceOptionController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
-}
-
-func (c *rkeK8sServiceOptionController) OnChange(ctx context.Context, name string, sync RkeK8sServiceOptionHandler) {
-	c.AddGenericHandler(ctx, name, FromRkeK8sServiceOptionHandlerToHandler(sync))
-}
-
-func (c *rkeK8sServiceOptionController) OnRemove(ctx context.Context, name string, sync RkeK8sServiceOptionHandler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromRkeK8sServiceOptionHandlerToHandler(sync)))
-}
-
-func (c *rkeK8sServiceOptionController) Enqueue(namespace, name string) {
-	c.controller.Enqueue(namespace, name)
-}
-
-func (c *rkeK8sServiceOptionController) EnqueueAfter(namespace, name string, duration time.Duration) {
-	c.controller.EnqueueAfter(namespace, name, duration)
-}
-
-func (c *rkeK8sServiceOptionController) Informer() cache.SharedIndexInformer {
-	return c.controller.Informer()
-}
-
-func (c *rkeK8sServiceOptionController) GroupVersionKind() schema.GroupVersionKind {
-	return c.gvk
-}
-
-func (c *rkeK8sServiceOptionController) Cache() RkeK8sServiceOptionCache {
-	return &rkeK8sServiceOptionCache{
-		indexer:  c.Informer().GetIndexer(),
-		resource: c.groupResource,
-	}
-}
-
-func (c *rkeK8sServiceOptionController) Create(obj *v3.RkeK8sServiceOption) (*v3.RkeK8sServiceOption, error) {
-	result := &v3.RkeK8sServiceOption{}
-	return result, c.client.Create(context.TODO(), obj.Namespace, obj, result, metav1.CreateOptions{})
-}
-
-func (c *rkeK8sServiceOptionController) Update(obj *v3.RkeK8sServiceOption) (*v3.RkeK8sServiceOption, error) {
-	result := &v3.RkeK8sServiceOption{}
-	return result, c.client.Update(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
-}
-
-func (c *rkeK8sServiceOptionController) Delete(namespace, name string, options *metav1.DeleteOptions) error {
-	if options == nil {
-		options = &metav1.DeleteOptions{}
-	}
-	return c.client.Delete(context.TODO(), namespace, name, *options)
-}
-
-func (c *rkeK8sServiceOptionController) Get(namespace, name string, options metav1.GetOptions) (*v3.RkeK8sServiceOption, error) {
-	result := &v3.RkeK8sServiceOption{}
-	return result, c.client.Get(context.TODO(), namespace, name, result, options)
-}
-
-func (c *rkeK8sServiceOptionController) List(namespace string, opts metav1.ListOptions) (*v3.RkeK8sServiceOptionList, error) {
-	result := &v3.RkeK8sServiceOptionList{}
-	return result, c.client.List(context.TODO(), namespace, result, opts)
-}
-
-func (c *rkeK8sServiceOptionController) Watch(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
-	return c.client.Watch(context.TODO(), namespace, opts)
-}
-
-func (c *rkeK8sServiceOptionController) Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (*v3.RkeK8sServiceOption, error) {
-	result := &v3.RkeK8sServiceOption{}
-	return result, c.client.Patch(context.TODO(), namespace, name, pt, data, result, metav1.PatchOptions{}, subresources...)
-}
-
-type rkeK8sServiceOptionCache struct {
-	indexer  cache.Indexer
-	resource schema.GroupResource
-}
-
-func (c *rkeK8sServiceOptionCache) Get(namespace, name string) (*v3.RkeK8sServiceOption, error) {
-	obj, exists, err := c.indexer.GetByKey(namespace + "/" + name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(c.resource, name)
-	}
-	return obj.(*v3.RkeK8sServiceOption), nil
-}
-
-func (c *rkeK8sServiceOptionCache) List(namespace string, selector labels.Selector) (ret []*v3.RkeK8sServiceOption, err error) {
-
-	err = cache.ListAllByNamespace(c.indexer, namespace, selector, func(m interface{}) {
-		ret = append(ret, m.(*v3.RkeK8sServiceOption))
-	})
-
-	return ret, err
-}
-
-func (c *rkeK8sServiceOptionCache) AddIndexer(indexName string, indexer RkeK8sServiceOptionIndexer) {
-	utilruntime.Must(c.indexer.AddIndexers(map[string]cache.IndexFunc{
-		indexName: func(obj interface{}) (strings []string, e error) {
-			return indexer(obj.(*v3.RkeK8sServiceOption))
-		},
-	}))
-}
-
-func (c *rkeK8sServiceOptionCache) GetByIndex(indexName, key string) (result []*v3.RkeK8sServiceOption, err error) {
-	objs, err := c.indexer.ByIndex(indexName, key)
-	if err != nil {
-		return nil, err
-	}
-	result = make([]*v3.RkeK8sServiceOption, 0, len(objs))
-	for _, obj := range objs {
-		result = append(result, obj.(*v3.RkeK8sServiceOption))
-	}
-	return result, nil
+func (c RkeK8sServiceOptionGenericCache) AddIndexer(indexName string, indexer RkeK8sServiceOptionIndexer) {
+	c.CacheInterface.AddIndexer(indexName, generic.Indexer[*v3.RkeK8sServiceOption](indexer))
 }

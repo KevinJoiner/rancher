@@ -22,8 +22,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/rancher/lasso/pkg/client"
-	"github.com/rancher/lasso/pkg/controller"
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/condition"
@@ -36,9 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/tools/cache"
 )
 
 type ProjectAlertGroupHandler func(string, *v3.ProjectAlertGroup) (*v3.ProjectAlertGroup, error)
@@ -76,196 +72,39 @@ type ProjectAlertGroupCache interface {
 
 type ProjectAlertGroupIndexer func(obj *v3.ProjectAlertGroup) ([]string, error)
 
-type projectAlertGroupController struct {
-	controller    controller.SharedController
-	client        *client.Client
-	gvk           schema.GroupVersionKind
-	groupResource schema.GroupResource
+type ProjectAlertGroupGenericController struct {
+	generic.ControllerInterface[*v3.ProjectAlertGroup, *v3.ProjectAlertGroupList]
 }
 
-func NewProjectAlertGroupController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) ProjectAlertGroupController {
-	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
-	return &projectAlertGroupController{
-		controller: c,
-		client:     c.Client(),
-		gvk:        gvk,
-		groupResource: schema.GroupResource{
-			Group:    gvk.Group,
-			Resource: resource,
-		},
+func (c *ProjectAlertGroupGenericController) OnChange(ctx context.Context, name string, sync ProjectAlertGroupHandler) {
+	c.ControllerInterface.OnChange(ctx, name, generic.ObjectHandler[*v3.ProjectAlertGroup](sync))
+}
+
+func (c *ProjectAlertGroupGenericController) OnRemove(ctx context.Context, name string, sync ProjectAlertGroupHandler) {
+	c.ControllerInterface.OnRemove(ctx, name, generic.ObjectHandler[*v3.ProjectAlertGroup](sync))
+}
+
+func (c *ProjectAlertGroupGenericController) Cache() ProjectAlertGroupCache {
+	return &ProjectAlertGroupGenericCache{
+		c.ControllerInterface.Cache(),
 	}
 }
 
-func FromProjectAlertGroupHandlerToHandler(sync ProjectAlertGroupHandler) generic.Handler {
-	return func(key string, obj runtime.Object) (ret runtime.Object, err error) {
-		var v *v3.ProjectAlertGroup
-		if obj == nil {
-			v, err = sync(key, nil)
-		} else {
-			v, err = sync(key, obj.(*v3.ProjectAlertGroup))
-		}
-		if v == nil {
-			return nil, err
-		}
-		return v, err
-	}
+type ProjectAlertGroupGenericCache struct {
+	generic.CacheInterface[*v3.ProjectAlertGroup]
 }
 
-func (c *projectAlertGroupController) Updater() generic.Updater {
-	return func(obj runtime.Object) (runtime.Object, error) {
-		newObj, err := c.Update(obj.(*v3.ProjectAlertGroup))
-		if newObj == nil {
-			return nil, err
-		}
-		return newObj, err
-	}
-}
-
-func UpdateProjectAlertGroupDeepCopyOnChange(client ProjectAlertGroupClient, obj *v3.ProjectAlertGroup, handler func(obj *v3.ProjectAlertGroup) (*v3.ProjectAlertGroup, error)) (*v3.ProjectAlertGroup, error) {
-	if obj == nil {
-		return obj, nil
-	}
-
-	copyObj := obj.DeepCopy()
-	newObj, err := handler(copyObj)
-	if newObj != nil {
-		copyObj = newObj
-	}
-	if obj.ResourceVersion == copyObj.ResourceVersion && !equality.Semantic.DeepEqual(obj, copyObj) {
-		return client.Update(copyObj)
-	}
-
-	return copyObj, err
-}
-
-func (c *projectAlertGroupController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
-}
-
-func (c *projectAlertGroupController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
-}
-
-func (c *projectAlertGroupController) OnChange(ctx context.Context, name string, sync ProjectAlertGroupHandler) {
-	c.AddGenericHandler(ctx, name, FromProjectAlertGroupHandlerToHandler(sync))
-}
-
-func (c *projectAlertGroupController) OnRemove(ctx context.Context, name string, sync ProjectAlertGroupHandler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromProjectAlertGroupHandlerToHandler(sync)))
-}
-
-func (c *projectAlertGroupController) Enqueue(namespace, name string) {
-	c.controller.Enqueue(namespace, name)
-}
-
-func (c *projectAlertGroupController) EnqueueAfter(namespace, name string, duration time.Duration) {
-	c.controller.EnqueueAfter(namespace, name, duration)
-}
-
-func (c *projectAlertGroupController) Informer() cache.SharedIndexInformer {
-	return c.controller.Informer()
-}
-
-func (c *projectAlertGroupController) GroupVersionKind() schema.GroupVersionKind {
-	return c.gvk
-}
-
-func (c *projectAlertGroupController) Cache() ProjectAlertGroupCache {
-	return &projectAlertGroupCache{
-		indexer:  c.Informer().GetIndexer(),
-		resource: c.groupResource,
-	}
-}
-
-func (c *projectAlertGroupController) Create(obj *v3.ProjectAlertGroup) (*v3.ProjectAlertGroup, error) {
-	result := &v3.ProjectAlertGroup{}
-	return result, c.client.Create(context.TODO(), obj.Namespace, obj, result, metav1.CreateOptions{})
-}
-
-func (c *projectAlertGroupController) Update(obj *v3.ProjectAlertGroup) (*v3.ProjectAlertGroup, error) {
-	result := &v3.ProjectAlertGroup{}
-	return result, c.client.Update(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
-}
-
-func (c *projectAlertGroupController) UpdateStatus(obj *v3.ProjectAlertGroup) (*v3.ProjectAlertGroup, error) {
-	result := &v3.ProjectAlertGroup{}
-	return result, c.client.UpdateStatus(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
-}
-
-func (c *projectAlertGroupController) Delete(namespace, name string, options *metav1.DeleteOptions) error {
-	if options == nil {
-		options = &metav1.DeleteOptions{}
-	}
-	return c.client.Delete(context.TODO(), namespace, name, *options)
-}
-
-func (c *projectAlertGroupController) Get(namespace, name string, options metav1.GetOptions) (*v3.ProjectAlertGroup, error) {
-	result := &v3.ProjectAlertGroup{}
-	return result, c.client.Get(context.TODO(), namespace, name, result, options)
-}
-
-func (c *projectAlertGroupController) List(namespace string, opts metav1.ListOptions) (*v3.ProjectAlertGroupList, error) {
-	result := &v3.ProjectAlertGroupList{}
-	return result, c.client.List(context.TODO(), namespace, result, opts)
-}
-
-func (c *projectAlertGroupController) Watch(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
-	return c.client.Watch(context.TODO(), namespace, opts)
-}
-
-func (c *projectAlertGroupController) Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (*v3.ProjectAlertGroup, error) {
-	result := &v3.ProjectAlertGroup{}
-	return result, c.client.Patch(context.TODO(), namespace, name, pt, data, result, metav1.PatchOptions{}, subresources...)
-}
-
-type projectAlertGroupCache struct {
-	indexer  cache.Indexer
-	resource schema.GroupResource
-}
-
-func (c *projectAlertGroupCache) Get(namespace, name string) (*v3.ProjectAlertGroup, error) {
-	obj, exists, err := c.indexer.GetByKey(namespace + "/" + name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(c.resource, name)
-	}
-	return obj.(*v3.ProjectAlertGroup), nil
-}
-
-func (c *projectAlertGroupCache) List(namespace string, selector labels.Selector) (ret []*v3.ProjectAlertGroup, err error) {
-
-	err = cache.ListAllByNamespace(c.indexer, namespace, selector, func(m interface{}) {
-		ret = append(ret, m.(*v3.ProjectAlertGroup))
-	})
-
-	return ret, err
-}
-
-func (c *projectAlertGroupCache) AddIndexer(indexName string, indexer ProjectAlertGroupIndexer) {
-	utilruntime.Must(c.indexer.AddIndexers(map[string]cache.IndexFunc{
-		indexName: func(obj interface{}) (strings []string, e error) {
-			return indexer(obj.(*v3.ProjectAlertGroup))
-		},
-	}))
-}
-
-func (c *projectAlertGroupCache) GetByIndex(indexName, key string) (result []*v3.ProjectAlertGroup, err error) {
-	objs, err := c.indexer.ByIndex(indexName, key)
-	if err != nil {
-		return nil, err
-	}
-	result = make([]*v3.ProjectAlertGroup, 0, len(objs))
-	for _, obj := range objs {
-		result = append(result, obj.(*v3.ProjectAlertGroup))
-	}
-	return result, nil
+func (c ProjectAlertGroupGenericCache) AddIndexer(indexName string, indexer ProjectAlertGroupIndexer) {
+	c.CacheInterface.AddIndexer(indexName, generic.Indexer[*v3.ProjectAlertGroup](indexer))
 }
 
 type ProjectAlertGroupStatusHandler func(obj *v3.ProjectAlertGroup, status v3.AlertStatus) (v3.AlertStatus, error)
 
 type ProjectAlertGroupGeneratingHandler func(obj *v3.ProjectAlertGroup, status v3.AlertStatus) ([]runtime.Object, v3.AlertStatus, error)
+
+func FromProjectAlertGroupHandlerToHandler(sync ProjectAlertGroupHandler) generic.Handler {
+	return generic.FromObjectHandlerToHandler(generic.ObjectHandler[*v3.ProjectAlertGroup](sync))
+}
 
 func RegisterProjectAlertGroupStatusHandler(ctx context.Context, controller ProjectAlertGroupController, condition condition.Cond, name string, handler ProjectAlertGroupStatusHandler) {
 	statusHandler := &projectAlertGroupStatusHandler{
