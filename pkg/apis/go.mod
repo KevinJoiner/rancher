@@ -2,6 +2,12 @@ module github.com/rancher/rancher/pkg/apis
 
 go 1.19
 
+//TODO: Replace with real commits
+replace (
+	github.com/rancher/lasso v0.0.0-20221227210133-6ea88ca2fbcc => /Users/kjoiner/dev/rancher/lasso
+	github.com/rancher/wrangler v1.1.1 => /Users/kjoiner/dev/rancher/wrangler
+)
+
 replace k8s.io/client-go => github.com/rancher/client-go v1.25.4-rancher1
 
 require (

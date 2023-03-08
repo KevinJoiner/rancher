@@ -2,6 +2,12 @@ module github.com/rancher/rancher
 
 go 1.19
 
+//TODO: Replace with real commits
+replace (
+	github.com/rancher/lasso v0.0.0-20230428185353-36908edf817b => /Users/kjoiner/dev/rancher/lasso
+	github.com/rancher/wrangler v1.1.1 => /Users/kjoiner/dev/rancher/wrangler
+)
+
 replace (
 	github.com/docker/distribution => github.com/docker/distribution v2.7.1+incompatible // oras dep requires a replace is set
 	github.com/docker/docker => github.com/docker/docker v20.10.18+incompatible // oras dep requires a replace is set
