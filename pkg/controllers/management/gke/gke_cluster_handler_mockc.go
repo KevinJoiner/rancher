@@ -1,7 +1,3 @@
-//
-// CODE GENERATED AUTOMATICALLY WITH github.com/kelveny/mockcompose
-// THIS FILE SHOULD NOT BE EDITED BY HAND
-//
 package gke
 
 import (
@@ -10,12 +6,16 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"testing"
 	"time"
 
 	"github.com/ghodss/yaml"
+	"github.com/golang/mock/gomock"
 	v1 "github.com/rancher/gke-operator/pkg/apis/gke.cattle.io/v1"
+	apisv3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/controllers/management/clusteroperator"
 	mgmtv3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
+	"github.com/rancher/wrangler/pkg/generic/fake"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/mock"
 	secretv1 "k8s.io/api/core/v1"
@@ -33,7 +33,16 @@ type mockGkeOperatorController struct {
 	mock.Mock
 }
 
-func getMockGkeOperatorController(clusterState string) mockGkeOperatorController {
+func getMockGkeOperatorController(t *testing.T, clusterState string) mockGkeOperatorController {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	clusterMock := fake.NewMockNoNsClientInterface[*apisv3.Cluster, *apisv3.ClusterList](ctrl)
+	clusterMock.EXPECT().Update(gomock.Any()).DoAndReturn(
+		func(c *apisv3.Cluster) (*apisv3.Cluster, error) {
+			return c, nil
+		},
+	).AnyTimes()
+
 	var dynamicClient dynamic.NamespaceableResourceInterface
 
 	switch clusterState {
@@ -54,7 +63,7 @@ func getMockGkeOperatorController(clusterState string) mockGkeOperatorController
 	return mockGkeOperatorController{
 		gkeOperatorController: gkeOperatorController{
 			OperatorController: clusteroperator.OperatorController{
-				ClusterEnqueueAfter:  func(name string, duration time.Duration){},
+				ClusterEnqueueAfter:  func(name string, duration time.Duration) {},
 				SecretsCache:         nil,
 				Secrets:              nil,
 				TemplateCache:        nil,
@@ -62,11 +71,11 @@ func getMockGkeOperatorController(clusterState string) mockGkeOperatorController
 				AppLister:            nil,
 				AppClient:            nil,
 				NsClient:             nil,
-				ClusterClient:        MockClusterClient{},
+				ClusterClient:        clusterMock,
 				CatalogManager:       nil,
 				SystemAccountManager: nil,
 				DynamicClient:        dynamicClient,
-				ClientDialer: 		  MockFactory{},
+				ClientDialer:         MockFactory{},
 				Discovery:            MockDiscovery{},
 			},
 		},

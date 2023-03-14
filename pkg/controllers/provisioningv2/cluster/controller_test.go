@@ -2,24 +2,19 @@ package cluster
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
+	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	rkev1 "github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1"
+	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/wrangler/pkg/generic/fake"
 	"github.com/stretchr/testify/assert"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	capi "sigs.k8s.io/cluster-api/api/v1beta1"
-
-	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
-	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
-	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
-	mgmtv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
-	"github.com/rancher/rancher/pkg/generated/mocks"
-	"github.com/rancher/wrangler/pkg/generic"
 )
 
 func TestRegexp(t *testing.T) {
@@ -116,12 +111,13 @@ func TestController_createNewCluster(t *testing.T) {
 			},
 		},
 	}
-
+	mockCtrl := gomock.NewController(t)
+	clusterCache := fake.NewMockNoNsCacheInterface[*v3.Cluster](mockCtrl)
+	clusterCache.EXPECT().Get(gomock.Any()).Return(&v3.Cluster{}, nil).AnyTimes()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := handler{
-				mgmtClusterCache: &mockClusterCache{
-					clusters: map[string]*v3.Cluster{}},
+				mgmtClusterCache: clusterCache,
 			}
 
 			obj, _, err := h.createNewCluster(tt.cluster, tt.cluster.Status, tt.clusterSpec)
@@ -259,23 +255,6 @@ func getTestFleetAgentResourceReq() *corev1.ResourceRequirements {
 	}
 }
 
-// implements v3.ClusterCache
-type mockClusterCache struct {
-	clusters map[string]*v3.Cluster
-}
-
-func (f *mockClusterCache) Get(name string) (*v3.Cluster, error) {
-	return &v3.Cluster{}, nil
-}
-
-func (f *mockClusterCache) List(selector labels.Selector) ([]*v3.Cluster, error) {
-	return nil, fmt.Errorf("unimplemented")
-}
-func (f *mockClusterCache) AddIndexer(indexName string, indexer mgmtv3.ClusterIndexer) {}
-func (f *mockClusterCache) GetByIndex(indexName, key string) ([]*v3.Cluster, error) {
-	return nil, fmt.Errorf("unimplemented")
-}
-
 func TestOnClusterRemove_CAPI_WithOwned(t *testing.T) {
 	name := "test"
 	namespace := "default"
@@ -283,12 +262,11 @@ func TestOnClusterRemove_CAPI_WithOwned(t *testing.T) {
 	capiCluster := createCAPICluster(name, namespace, rancherCluster)
 
 	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 
-	clusterControllerMock := mocks.NewMockClusterController(mockCtrl)
-	capiClusterCache := mocks.NewMockClusterCache(mockCtrl)
-	capiClusterClient := mocks.NewMockClusterClient(mockCtrl)
-	rkeControlPlaneCache := mocks.NewMockRKEControlPlaneCache(mockCtrl)
+	clusterControllerMock := fake.NewMockControllerInterface[*v1.Cluster, *v1.ClusterList](mockCtrl)
+	capiClusterCache := fake.NewMockCacheInterface[*capi.Cluster](mockCtrl)
+	capiClusterClient := fake.NewMockClientInterface[*capi.Cluster, *capi.ClusterList](mockCtrl)
+	rkeControlPlaneCache := fake.NewMockCacheInterface[*rkev1.RKEControlPlane](mockCtrl)
 
 	capiClusterCache.EXPECT().Get(rancherCluster.Namespace, rancherCluster.Name).Return(capiCluster, nil)
 	clusterControllerMock.EXPECT().UpdateStatus(gomock.AssignableToTypeOf(rancherCluster)).Return(rancherCluster, nil)
@@ -313,10 +291,9 @@ func TestOnClusterRemove_CAPI_NotOwned(t *testing.T) {
 	capiCluster := createCAPICluster(name, namespace, nil)
 
 	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 
-	clusterControllerMock := mocks.NewMockClusterController(mockCtrl)
-	capiClusterCache := mocks.NewMockClusterCache(mockCtrl)
+	clusterControllerMock := fake.NewMockControllerInterface[*v1.Cluster, *v1.ClusterList](mockCtrl)
+	capiClusterCache := fake.NewMockCacheInterface[*capi.Cluster](mockCtrl)
 
 	capiClusterCache.EXPECT().Get(rancherCluster.Namespace, rancherCluster.Name).Return(capiCluster, nil)
 	clusterControllerMock.EXPECT().UpdateStatus(gomock.AssignableToTypeOf(rancherCluster)).Return(rancherCluster, nil)
@@ -329,18 +306,18 @@ func TestOnClusterRemove_CAPI_NotOwned(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func createRancherCluster(name, namespace string) *provv1.Cluster {
-	return &provv1.Cluster{
+func createRancherCluster(name, namespace string) *v1.Cluster {
+	return &v1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec:   provv1.ClusterSpec{},
-		Status: provv1.ClusterStatus{},
+		Spec:   v1.ClusterSpec{},
+		Status: v1.ClusterStatus{},
 	}
 }
 
-func createCAPICluster(name, namespace string, ownedBy *provv1.Cluster) *capi.Cluster {
+func createCAPICluster(name, namespace string, ownedBy *v1.Cluster) *capi.Cluster {
 	cluster := &capi.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -353,7 +330,7 @@ func createCAPICluster(name, namespace string, ownedBy *provv1.Cluster) *capi.Cl
 	if ownedBy != nil {
 		cluster.OwnerReferences = []metav1.OwnerReference{
 			{
-				APIVersion: provv1.SchemeGroupVersion.Identifier(),
+				APIVersion: v1.SchemeGroupVersion.Identifier(),
 				Kind:       "Cluster",
 				Name:       ownedBy.Name,
 			},
