@@ -99,7 +99,8 @@ def test_roletemplate_finalizer_cleanup(admin_mc, remove_resource):
     """ This ensures that roletemplates cleanup for clusters < v2.2.8
         is performed correctly"""
     client = admin_mc.client
-    rt = client.create_roleTemplate(name="rt-" + random_str())
+    rt = client.create_roleTemplate(
+        name="rt-" + random_str(), context="cluster")
     remove_resource(rt)
     assert rt.annotations[rtAnno] == "true"
 
@@ -115,7 +116,8 @@ def test_roletemplate_finalizer_cleanup(admin_mc, remove_resource):
                 "fake-finalizer"
             ],
             "name": "test-" + random_str(),
-        }
+        },
+        "context": "cluster"
     }
     rt_k8s = api.create_cluster_custom_object(
         group="management.cattle.io",

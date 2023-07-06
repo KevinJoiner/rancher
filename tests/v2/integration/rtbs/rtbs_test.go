@@ -224,7 +224,7 @@ func (p *RTBTestSuite) TestCRTBRoleTemplateInheritance() {
 
 	rtB, err := client.Management.RoleTemplate.Create(
 		&management.RoleTemplate{
-			Context: "",
+			Context: "cluster",
 			Name:    "RoleB",
 			Rules: []management.PolicyRule{
 				{

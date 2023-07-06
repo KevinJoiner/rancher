@@ -8,7 +8,7 @@ import kubernetes
 
 def test_role_template_creation(admin_mc, remove_resource):
     rt_name = random_str()
-    rt = admin_mc.client.create_role_template(name=rt_name)
+    rt = admin_mc.client.create_role_template(name=rt_name, context="cluster")
     remove_resource(rt)
     assert rt is not None
     assert rt.name == rt_name
@@ -38,7 +38,7 @@ def test_edit_builtin_role_template(admin_mc, remove_resource):
     client = admin_mc.client
     # edit non builtin role, any field is updatable
     org_rt_name = random_str()
-    rt = client.create_role_template(name=org_rt_name)
+    rt = client.create_role_template(name=org_rt_name, context="cluster")
     remove_resource(rt)
     wait_for_role_template_creation(admin_mc, org_rt_name)
     new_rt_name = random_str()
